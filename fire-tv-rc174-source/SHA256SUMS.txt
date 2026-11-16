@@ -1,0 +1,2 @@
+55376046db28b74fc5cd77d8d920c9c283198f56541c5bcb9fa9328647c59789  JTPlay-FireTV-RC174.patch
+98409a8fdd4b0fefe2f7a55d805cf9554af7b92d411d6bf4b19a5cd6d7ae8e16  JTPlay-FireTV-RC173-Android-Sources-and-Notices-Final.zip
