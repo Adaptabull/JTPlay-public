@@ -1,0 +1,200 @@
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+index dd7878c4f..088ad660e 100644
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -400,11 +400,18 @@ android {
+ 
+   packaging {
+     jniLibs {
++      if (System.getenv("AMAZON") != null) {
++        excludes.addAll(listOf("lib/x86/**", "lib/x86_64/**"))
++      }
+       // pickFirst only suppresses the duplicate libc++ merge error; the
+       // sourceSets rule below makes the runtime the mpv-android AAR carries
+       // (the one libmpv was linked against) win for std::from_chars<float>,
+       // while older native consumers remain ABI-compatible.
+-      pickFirsts.add("lib/*/libc++_shared.so")
++      if (System.getenv("AMAZON") != null) {
++        pickFirsts.addAll(listOf("lib/armeabi-v7a/libc++_shared.so", "lib/arm64-v8a/libc++_shared.so"))
++      } else {
++        pickFirsts.add("lib/*/libc++_shared.so")
++      }
+     }
+   }
+ 
+@@ -451,6 +458,18 @@ val verifyBackgroundDownloaderNotificationChannel = tasks.register("verifyBackgr
+     }
+   }
+ }
++// Direct Gradle builds can silently package an APK with no Flutter plugins.
++val verifyFlutterPluginRegistrant = tasks.register("verifyFlutterPluginRegistrant") {
++  val registrant = layout.projectDirectory.file("src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java")
++  doLast {
++    if (!registrant.asFile.isFile) {
++      throw GradleException("Flutter Android plugin registrant is missing. Run flutter pub get before building with Gradle.")
++    }
++  }
++}
++tasks.matching { it.name == "preReleaseBuild" }.configureEach {
++  dependsOn(verifyFlutterPluginRegistrant)
++}
+ tasks.named("preBuild").configure {
+   dependsOn(verifyBackgroundDownloaderNotificationChannel)
+ }
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index b0b82ce76..eed67850c 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -46,7 +46,7 @@
+         <!-- The activity itself has no launcher entry: the launcher components are the aliases
+              below, so the app icon can be switched by enabling one alias and disabling the rest.
+              Deep links stay here so they resolve whichever alias is enabled.
+-             turnScreenOn lets a plezy:// link sent during the screensaver (e.g. by a home
++             turnScreenOn lets a jtplay:// link sent during the screensaver (e.g. by a home
+              automation) wake the device; set at runtime it comes too late, as the activity
+              is already launched behind the screensaver. -->
+         <activity
+@@ -72,14 +72,14 @@
+                 <action android:name="android.intent.action.VIEW"/>
+                 <category android:name="android.intent.category.DEFAULT"/>
+                 <category android:name="android.intent.category.BROWSABLE"/>
+-                <data android:scheme="plezy" android:host="play"/>
++                <data android:scheme="jtplay" android:host="play"/>
+             </intent-filter>
+-            <!-- Deep link for tuning a live TV channel: plezy://live?channel=...&start=beginning|live -->
++            <!-- Deep link for tuning a live TV channel: jtplay://live?channel=...&start=beginning|live -->
+             <intent-filter>
+                 <action android:name="android.intent.action.VIEW"/>
+                 <category android:name="android.intent.category.DEFAULT"/>
+                 <category android:name="android.intent.category.BROWSABLE"/>
+-                <data android:scheme="plezy" android:host="live"/>
++                <data android:scheme="jtplay" android:host="live"/>
+             </intent-filter>
+         </activity>
+         <!-- The default icon. Keep this component name forever: it was the launcher activity before
+diff --git a/android/app/src/main/kotlin/com/edde746/plezy/watchnext/WatchNextPlugin.kt b/android/app/src/main/kotlin/com/edde746/plezy/watchnext/WatchNextPlugin.kt
+index e2a9f3535..258eda5d1 100644
+--- a/android/app/src/main/kotlin/com/edde746/plezy/watchnext/WatchNextPlugin.kt
++++ b/android/app/src/main/kotlin/com/edde746/plezy/watchnext/WatchNextPlugin.kt
+@@ -29,12 +29,12 @@ class WatchNextPlugin() :
+ 
+     /**
+      * Returns the payload to forward to Dart: the `content_id` of a
+-     * `plezy://play` shelf link, or the whole URI of a `plezy://live` link
++     * `jtplay://play` shelf link, or the whole URI of a `jtplay://live` link
+      * (parsed by `LiveTvDeepLink` on the Dart side).
+      */
+     fun handleIntent(intent: Intent?): String? {
+       val data = intent?.data ?: return null
+-      if (data.scheme != "plezy") return null
++      if (data.scheme != "jtplay") return null
+       return when (data.authority) {
+         "play" -> data.getQueryParameter("content_id")
+         "live" -> data.toString()
+diff --git a/android/app/src/main/kotlin/com/edde746/plezy/watchnext/WatchNextProvider.kt b/android/app/src/main/kotlin/com/edde746/plezy/watchnext/WatchNextProvider.kt
+index 802eea700..bfa450b63 100644
+--- a/android/app/src/main/kotlin/com/edde746/plezy/watchnext/WatchNextProvider.kt
++++ b/android/app/src/main/kotlin/com/edde746/plezy/watchnext/WatchNextProvider.kt
+@@ -457,7 +457,7 @@ class WatchNextProvider internal constructor(
+ 
+   private fun contentIdFromIntent(value: String?): String? {
+     val uri = value?.let { runCatching { Uri.parse(it) }.getOrNull() } ?: return null
+-    if (uri.scheme != "plezy" || uri.authority != "play") return null
++    if (uri.scheme != "jtplay" || uri.authority != "play") return null
+     return uri.getQueryParameter("content_id")?.takeIf(String::isNotBlank)
+   }
+ 
+@@ -740,7 +740,7 @@ class WatchNextProvider internal constructor(
+       metadata.episodeNumber?.let(builder::setEpisodeNumber)
+     }
+     builder.setIntentUri(
+-      Uri.Builder().scheme("plezy").authority("play")
++      Uri.Builder().scheme("jtplay").authority("play")
+         .appendQueryParameter("content_id", metadata.contentId).build()
+     )
+     return builder.build()
+diff --git a/lib/screens/main_screen.dart b/lib/screens/main_screen.dart
+index c57848ee9..26846743c 100644
+--- a/lib/screens/main_screen.dart
++++ b/lib/screens/main_screen.dart
+@@ -905,7 +905,7 @@ class _MainScreenState extends State<MainScreen>
+   Future<void> _handleShelfContentId(String contentId) async {
+     if (!mounted) return;
+ 
+-    // `plezy://live?...` links arrive through the same channel as shelf IDs.
++    // `jtplay://live?...` links arrive through the same channel as shelf IDs.
+     final liveLink = LiveTvDeepLink.tryParse(contentId);
+     if (liveLink != null) {
+       try {
+diff --git a/lib/utils/live_tv_deep_link.dart b/lib/utils/live_tv_deep_link.dart
+index 80df2e3cc..f95033064 100644
+--- a/lib/utils/live_tv_deep_link.dart
++++ b/lib/utils/live_tv_deep_link.dart
+@@ -7,9 +7,9 @@ import '../screens/video_player/live_tv_session_args.dart';
+ import 'app_logger.dart';
+ import 'live_tv_player_navigation.dart';
+ 
+-/// A `plezy://live` deep link that tunes a live TV channel.
++/// A `jtplay://live` deep link that tunes a live TV channel.
+ ///
+-/// Format: `plezy://live?channel=<channel>[&server=<machineIdentifier>][&start=beginning|live]`
++/// Format: `jtplay://live?channel=<channel>[&server=<machineIdentifier>][&start=beginning|live]`
+ ///
+ /// * `channel` (required) is matched against the channel key, identifier,
+ ///   number and call sign, in that order. The first rule that matches exactly
+@@ -22,11 +22,11 @@ import 'live_tv_player_navigation.dart';
+ ///   prompt is shown as usual.
+ ///
+ /// Intended for automation (e.g. a home automation system launching
+-/// `am start -a android.intent.action.VIEW -d "plezy://live?channel=4.1&start=beginning"`).
++/// `am start -a android.intent.action.VIEW -d "jtplay://live?channel=4.1&start=beginning"`).
+ class LiveTvDeepLink {
+   const LiveTvDeepLink({required this.channel, this.serverId, this.startPosition = LiveTvStartPosition.ask});
+ 
+-  static const scheme = 'plezy';
++  static const scheme = 'jtplay';
+   static const host = 'live';
+ 
+   final String channel;
+diff --git a/test/utils/live_tv_deep_link_test.dart b/test/utils/live_tv_deep_link_test.dart
+index 2a961e9de..0b5710196 100644
+--- a/test/utils/live_tv_deep_link_test.dart
++++ b/test/utils/live_tv_deep_link_test.dart
+@@ -9,7 +9,7 @@ LiveTvChannel _channel(String key, {String? identifier, String? number, String?
+ void main() {
+   group('LiveTvDeepLink.tryParse', () {
+     test('parses channel, server and start position', () {
+-      final link = LiveTvDeepLink.tryParse('plezy://live?channel=4.1&server=abc123&start=beginning');
++      final link = LiveTvDeepLink.tryParse('jtplay://live?channel=4.1&server=abc123&start=beginning');
+       expect(link, isNotNull);
+       expect(link!.channel, '4.1');
+       expect(link.serverId, 'abc123');
+@@ -17,21 +17,22 @@ void main() {
+     });
+ 
+     test('defaults to asking and any server', () {
+-      final link = LiveTvDeepLink.tryParse('plezy://live?channel=KNTV');
++      final link = LiveTvDeepLink.tryParse('jtplay://live?channel=KNTV');
+       expect(link!.serverId, isNull);
+       expect(link.startPosition, LiveTvStartPosition.ask);
+     });
+ 
+     test('accepts live start', () {
+-      expect(LiveTvDeepLink.tryParse('plezy://live?channel=4&start=live')!.startPosition, LiveTvStartPosition.live);
++      expect(LiveTvDeepLink.tryParse('jtplay://live?channel=4&start=live')!.startPosition, LiveTvStartPosition.live);
+     });
+ 
+     test('rejects other links and malformed input', () {
+       expect(LiveTvDeepLink.tryParse('plezy_server_123'), isNull);
+-      expect(LiveTvDeepLink.tryParse('plezy://play?content_id=plezy_a_1'), isNull);
+-      expect(LiveTvDeepLink.tryParse('plezy://live'), isNull);
+-      expect(LiveTvDeepLink.tryParse('plezy://live?channel='), isNull);
+-      expect(LiveTvDeepLink.tryParse('plezy://live?channel=4&start=sideways'), isNull);
++      expect(LiveTvDeepLink.tryParse('jtplay://play?content_id=plezy_a_1'), isNull);
++      expect(LiveTvDeepLink.tryParse('jtplay://live'), isNull);
++      expect(LiveTvDeepLink.tryParse('plezy://live?channel=4'), isNull);
++      expect(LiveTvDeepLink.tryParse('jtplay://live?channel='), isNull);
++      expect(LiveTvDeepLink.tryParse('jtplay://live?channel=4&start=sideways'), isNull);
+     });
+   });
+ 
